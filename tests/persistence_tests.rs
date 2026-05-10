@@ -614,3 +614,112 @@ async fn test_async_watcher_filters_non_source_files() -> Result<()> {
 
     Ok(())
 }
+
+/// Issue #26 regression: when the caller holds the shutdown `Sender`, the
+/// watcher must keep running and re-index files that change on disk. The
+/// original `main.rs` wiring dropped the `Sender` immediately, which made the
+/// internal `select!` loop see `Closed` on the first poll and exit before any
+/// file event could arrive — silently disabling `--watch`.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_spawn_watch_mode_keeps_running_when_sender_alive() -> Result<()> {
+    use narsil_mcp::index::{CodeIntelEngine, EngineOptions};
+    use narsil_mcp::persist;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let repo = TestRepo::new()?;
+    repo.add_rust_file("src/lib.rs", "pub fn original() {}")?;
+    let index_dir = TempDir::new()?;
+
+    // Canonicalize so that `/var/folders/...` (TempDir on macOS) and
+    // `/private/var/folders/...` (notify's emitted paths) line up — otherwise
+    // `process_file_changes` cannot match the change to a registered repo.
+    let repo_path = repo.path().canonicalize()?;
+
+    let engine = Arc::new(
+        CodeIntelEngine::with_options(
+            index_dir.path().to_path_buf(),
+            vec![repo_path.clone()],
+            EngineOptions {
+                watch_enabled: true,
+                ..Default::default()
+            },
+        )
+        .await?,
+    );
+
+    // Finish initial indexing so the repo is registered and findable.
+    engine.complete_initialization().await?;
+
+    // Mirror the production wiring from main.rs: hold the Sender so the
+    // watcher keeps running.
+    let _shutdown_tx = persist::spawn_watch_mode(Arc::clone(&engine));
+
+    // Allow the watcher to initialise.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Modify a watched file and wait long enough for debounce (300 ms) +
+    // event propagation + re-index.
+    repo.add_rust_file("src/lib.rs", "pub fn watcher_reindexed_me() {}")?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // The repo's directory name is what the engine uses as the repo key.
+    let repo_name = repo_path.file_name().unwrap().to_string_lossy().to_string();
+
+    // The new symbol must be visible — proves the watcher is alive and
+    // processed the file change.
+    let result = engine
+        .find_symbols(&repo_name, None, Some("watcher_reindexed_me"), None, None)
+        .await?;
+    assert!(
+        result.contains("watcher_reindexed_me"),
+        "expected new symbol after watched file change; got:\n{result}"
+    );
+
+    Ok(())
+}
+
+/// Documents the design contract of `run_watch_mode`: dropping every `Sender`
+/// is treated as a shutdown signal (the receiver returns `Err(Closed)`), so
+/// the loop exits promptly. Issue #26 was a *caller* bug — the wiring code
+/// dropped the Sender accidentally — not a bug in this function.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_watch_mode_exits_when_sender_dropped() -> Result<()> {
+    use narsil_mcp::index::{CodeIntelEngine, EngineOptions};
+    use narsil_mcp::persist;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let repo = TestRepo::new()?;
+    repo.add_rust_file("src/lib.rs", "pub fn test() {}")?;
+    let index_dir = TempDir::new()?;
+
+    let engine = Arc::new(
+        CodeIntelEngine::with_options(
+            index_dir.path().to_path_buf(),
+            vec![repo.path().to_path_buf()],
+            EngineOptions {
+                watch_enabled: true,
+                ..Default::default()
+            },
+        )
+        .await?,
+    );
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let watch_engine = Arc::clone(&engine);
+    let handle = tokio::spawn(async move {
+        persist::run_watch_mode(watch_engine, shutdown_rx).await;
+    });
+
+    // Drop the only Sender — the function should observe Closed and exit.
+    drop(shutdown_tx);
+
+    let result = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    assert!(
+        result.is_ok() && result.unwrap().is_ok(),
+        "watcher must exit promptly after the only Sender is dropped"
+    );
+
+    Ok(())
+}

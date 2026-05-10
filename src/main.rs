@@ -345,20 +345,18 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Start watch mode in background if enabled
-    if server_args.watch {
-        let watch_engine = Arc::clone(&engine);
-
-        // Create a shutdown signal channel for graceful shutdown
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-
-        tokio::spawn(async move {
-            run_watch_mode(watch_engine, shutdown_rx).await;
-        });
-
-        // Store shutdown sender for potential cleanup (not used currently but available for future)
-        drop(shutdown_tx);
-    }
+    // Start watch mode in background if enabled.
+    //
+    // The returned `Sender` MUST live until `main` returns — dropping it
+    // immediately makes the watcher loop see `Closed` on its first poll and
+    // exit milliseconds after spawn (issue #26). Binding the value to
+    // `_watch_shutdown_tx` here keeps it alive for the rest of `main`; the
+    // tokio runtime tears the detached task down when `main` returns.
+    let _watch_shutdown_tx = if server_args.watch {
+        Some(persist::spawn_watch_mode(Arc::clone(&engine)))
+    } else {
+        None
+    };
 
     // Start HTTP server in background if enabled (for visualization frontend)
     // The MCP server still runs on stdio for editor communication
@@ -379,46 +377,4 @@ async fn main() -> Result<()> {
     server.run().await?;
 
     Ok(())
-}
-
-/// Run the file watcher in background using async event-driven approach
-async fn run_watch_mode(
-    engine: Arc<index::CodeIntelEngine>,
-    mut shutdown: tokio::sync::broadcast::Receiver<()>,
-) {
-    info!("Starting async watch mode background task");
-
-    let (_watcher, mut rx) = match engine.create_async_file_watcher() {
-        Some((w, r)) => (w, r),
-        None => {
-            warn!("Failed to create async file watcher, watch mode disabled");
-            return;
-        }
-    };
-
-    loop {
-        tokio::select! {
-            // Receive batched file change events
-            Some(changes) = rx.recv() => {
-                if !changes.is_empty() {
-                    info!("Detected {} file change(s)", changes.len());
-                    match engine.process_file_changes(&changes).await {
-                        Ok(count) => {
-                            if count > 0 {
-                                info!("Re-indexed {} file(s)", count);
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Error processing file changes: {}", e);
-                        }
-                    }
-                }
-            }
-            // Handle shutdown signal
-            _ = shutdown.recv() => {
-                info!("Watch mode shutting down");
-                break;
-            }
-        }
-    }
 }

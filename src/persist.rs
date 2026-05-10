@@ -550,6 +550,81 @@ impl IncrementalIndexer {
     }
 }
 
+/// Run the file watcher in background using an async event-driven loop.
+///
+/// The function exits cleanly when:
+/// * The shutdown channel's only `Sender` is dropped (`recv()` returns
+///   `Err(Closed)`), or
+/// * A `()` value is sent on the shutdown channel.
+///
+/// **Bug history (issue #26):** the spawn site in `main.rs` used to drop the
+/// shutdown sender immediately after creating it, so the receiver here saw
+/// `Closed` on the first poll and the watcher exited milliseconds after
+/// startup — silently disabling `--watch`. Use `spawn_watch_mode` (below)
+/// from new call sites; it returns the sender so the caller cannot forget to
+/// keep it alive.
+pub async fn run_watch_mode(
+    engine: Arc<crate::index::CodeIntelEngine>,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+) {
+    info!("Starting async watch mode background task");
+
+    let (_watcher, mut rx) = match engine.create_async_file_watcher() {
+        Some((w, r)) => (w, r),
+        None => {
+            warn!("Failed to create async file watcher, watch mode disabled");
+            return;
+        }
+    };
+
+    loop {
+        tokio::select! {
+            // Receive batched file change events
+            Some(changes) = rx.recv() => {
+                if !changes.is_empty() {
+                    info!("Detected {} file change(s)", changes.len());
+                    match engine.process_file_changes(&changes).await {
+                        Ok(count) => {
+                            if count > 0 {
+                                info!("Re-indexed {} file(s)", count);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Error processing file changes: {}", e);
+                        }
+                    }
+                }
+            }
+            // Handle shutdown signal (or all senders dropped)
+            _ = shutdown.recv() => {
+                info!("Watch mode shutting down");
+                break;
+            }
+        }
+    }
+}
+
+/// Spawn the watch-mode background task and return the shutdown `Sender`.
+///
+/// **Callers must hold the returned `Sender` for as long as the watcher
+/// should keep running.** Dropping it makes the watcher loop exit on its
+/// next poll (this is the cause of issue #26 — the original wiring dropped
+/// the sender immediately).
+///
+/// The spawned task is detached; the returned `Sender` is the only handle
+/// needed to keep the watcher alive.
+#[must_use = "the returned Sender must be held until the watcher should stop; \
+              dropping it immediately exits the watcher (issue #26)"]
+pub fn spawn_watch_mode(
+    engine: Arc<crate::index::CodeIntelEngine>,
+) -> tokio::sync::broadcast::Sender<()> {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    tokio::spawn(async move {
+        run_watch_mode(engine, shutdown_rx).await;
+    });
+    shutdown_tx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
