@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-05-10
+
+### Fixed
+
+- **`tools/list` now exposes the full 90-tool catalog** (issue #23). Four
+  compounding bugs hid 87 of 90 tools from MCP clients:
+  - `NARSIL_ENABLED_CATEGORIES=""` no longer disables every category — empty
+    and whitespace-only env values are treated as unset, and empty segments
+    inside comma lists are filtered out. The same guard now applies to
+    `NARSIL_PRESET` and `NARSIL_DISABLED_TOOLS`.
+  - Tool category lookup uses `Display`, not `Debug`, so `ToolCategory::Lsp`
+    correctly matches the `LSP` YAML key. Previously LSP-category overrides
+    were silently ignored.
+  - `EngineOptions` gained `remote_enabled` so `--remote` actually surfaces
+    Remote-category tools; `convert_engine_options` now also propagates
+    `FeatureFlag::Graph` (under `--features graph`).
+  - `max_tool_count` raised from 76 to 128 (with headroom for new tools).
+    The Full preset now bypasses the cap entirely — it is an explicit
+    "expose everything" directive. Non-Full presets continue to honour the
+    budget.
+- **Watch mode actually runs** (issue #26). The spawn site dropped the
+  shutdown sender immediately, so the watcher's `select!` loop saw `Closed`
+  on its first poll and exited milliseconds after startup, silently
+  disabling `--watch`. Restructured into `persist::spawn_watch_mode` which
+  returns the sender (`#[must_use]`) so the lifetime requirement is now a
+  compile-time error class, not a comment.
+- **`cargo build --features frontend` succeeds without `frontend/dist`**
+  (issue #18b). Added `#[allow_missing = true]` to the `rust-embed` derive
+  and a `build.rs` that emits `cargo:warning` pointing the user at
+  `cd frontend && npm ci && npm run build` if the dist directory is empty.
+
+### Added
+
+- **Every CLI flag accepts a `NARSIL_*` env var** (issue #21). Enabled
+  clap's `env` feature and annotated every flag in `ServerArgs`. Notably:
+  `NARSIL_NEURAL_MODEL`, `NARSIL_NEURAL_BACKEND`, `NARSIL_NEURAL_DIMENSION`,
+  `NARSIL_REPOS` (comma-separated), `NARSIL_GIT`, `NARSIL_REMOTE`,
+  `NARSIL_GRAPH`, `NARSIL_HTTP`, `NARSIL_PRESET`, `NARSIL_INDEX_PATH`, etc.
+- **Bare `narsil-mcp` defaults to the current working directory** (issue
+  #22 partial). No more empty-repo errors when invoked inside a project
+  with no `--repos`. Missing repository paths are filtered out at startup
+  with a WARN log naming each one.
+- **Native Linux ARM64 release binary** (issue #20). Built on GitHub's
+  `ubuntu-24.04-arm` Graviton runner; published as
+  `narsil-mcp-vX.Y.Z-linux-aarch64.tar.gz`. The Homebrew tap formula now
+  selects this artifact via `Hardware::CPU.arm?` so `brew install` works
+  on Raspberry Pi, AWS Graviton, Asahi Linux, and Apple-silicon-via-Docker.
+
+### Tests
+
+- Added 17 new tests across config filter (Lsp Display lookup, Remote/Graph
+  propagation, Full-preset bypass, Remote tool visibility, env-var empty
+  handling), CLI parsing (every NARSIL_* env var, cwd fallback,
+  missing-path filter), watch mode (end-to-end file change → reindex), and
+  Java parsing (parser unit + Maven-layout integration test).
+- Added a process-wide `ENV_LOCK` mutex in env-var test sites and updated
+  six pre-existing `priority_tests` that were race-vulnerable.
+
 ## [1.6.1] - 2026-02-24
 
 ### Fixed
