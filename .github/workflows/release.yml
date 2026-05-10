@@ -261,7 +261,7 @@ jobs:
           VERSION=${{ steps.version.outputs.version }}
           BASE_URL="https://github.com/postrv/narsil-mcp/releases/download/v${VERSION}"
           mkdir -p sha256
-          for target in macos-x86_64 macos-aarch64 linux-x86_64; do
+          for target in macos-x86_64 macos-aarch64 linux-x86_64 linux-aarch64; do
             curl -fSL "${BASE_URL}/narsil-mcp-v${VERSION}-${target}.tar.gz.sha256" -o "sha256/${target}.sha256"
           done
 
@@ -271,6 +271,7 @@ jobs:
           echo "macos_x86_64=$(awk '{print $1}' sha256/macos-x86_64.sha256)" >> "$GITHUB_OUTPUT"
           echo "macos_aarch64=$(awk '{print $1}' sha256/macos-aarch64.sha256)" >> "$GITHUB_OUTPUT"
           echo "linux_x86_64=$(awk '{print $1}' sha256/linux-x86_64.sha256)" >> "$GITHUB_OUTPUT"
+          echo "linux_aarch64=$(awk '{print $1}' sha256/linux-aarch64.sha256)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout Homebrew tap
         uses: actions/checkout@v4
@@ -302,6 +303,9 @@ jobs:
               if Hardware::CPU.intel?
                 url "https://github.com/postrv/narsil-mcp/releases/download/vVERSION_PLACEHOLDER/narsil-mcp-vVERSION_PLACEHOLDER-linux-x86_64.tar.gz"
                 sha256 "LINUX_X86_64_PLACEHOLDER"
+              elsif Hardware::CPU.arm?
+                url "https://github.com/postrv/narsil-mcp/releases/download/vVERSION_PLACEHOLDER/narsil-mcp-vVERSION_PLACEHOLDER-linux-aarch64.tar.gz"
+                sha256 "LINUX_AARCH64_PLACEHOLDER"
               end
             end
 
@@ -362,6 +366,7 @@ jobs:
           sed -i "s/MACOS_X86_64_PLACEHOLDER/${{ steps.hashes.outputs.macos_x86_64 }}/g" Formula/narsil-mcp.rb
           sed -i "s/MACOS_AARCH64_PLACEHOLDER/${{ steps.hashes.outputs.macos_aarch64 }}/g" Formula/narsil-mcp.rb
           sed -i "s/LINUX_X86_64_PLACEHOLDER/${{ steps.hashes.outputs.linux_x86_64 }}/g" Formula/narsil-mcp.rb
+          sed -i "s/LINUX_AARCH64_PLACEHOLDER/${{ steps.hashes.outputs.linux_aarch64 }}/g" Formula/narsil-mcp.rb
 
           echo "Generated formula:"
           cat Formula/narsil-mcp.rb

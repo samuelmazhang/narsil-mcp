@@ -29,6 +29,14 @@ jobs:
             target: x86_64-unknown-linux-musl
             artifact: narsil-mcp-linux-x86_64-musl
             binary: narsil-mcp
+          # Native ARM64 Linux build via GitHub-hosted Graviton runners.
+          # No cross-compile toolchain required — addresses issue #20
+          # for Raspberry Pi, AWS Graviton, and Apple-silicon-via-Docker
+          # users who previously had no prebuilt binary.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: narsil-mcp-linux-aarch64
+            binary: narsil-mcp
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: narsil-mcp-macos-x86_64
