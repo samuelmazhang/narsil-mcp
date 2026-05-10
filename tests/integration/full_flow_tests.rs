@@ -425,10 +425,12 @@ async fn test_performance_budget_max_tool_count() -> Result<()> {
 
     let _engine = create_test_engine(vec![repo_path], options.clone()).await?;
 
-    // Set low max_tool_count
+    // Set low max_tool_count. Use the Balanced preset — Full bypasses the cap
+    // entirely (see issue #23) so the budget would not apply with `preset: None`,
+    // which falls back to Full when no client is set.
     let config = ToolConfig {
         version: "1.0".to_string(),
-        preset: None,
+        preset: Some("balanced".to_string()),
         editors: HashMap::new(),
         tools: ToolsConfig {
             categories: HashMap::new(),

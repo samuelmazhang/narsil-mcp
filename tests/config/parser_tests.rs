@@ -223,7 +223,7 @@ tools:
     let config: ToolConfig = serde_saphyr::from_str(yaml).expect("Should parse");
 
     // Performance config should have defaults
-    assert_eq!(config.performance.max_tool_count, 76);
+    assert_eq!(config.performance.max_tool_count, 128);
     assert_eq!(config.performance.startup_latency_ms, 10);
     assert_eq!(config.performance.filtering_latency_ms, 1);
 }

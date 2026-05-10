@@ -93,6 +93,11 @@ pub struct EngineOptions {
     pub persist_enabled: bool,
     /// Enable file watching for incremental updates
     pub watch_enabled: bool,
+    /// Enable remote GitHub repository support (gates Remote-category tools).
+    /// Mirrors `--remote` so `ToolFilter::convert_engine_options` can surface
+    /// `FeatureFlag::Remote` and the Remote tools become visible in
+    /// `tools/list`.
+    pub remote_enabled: bool,
     /// Streaming configuration
     pub streaming_config: StreamingConfig,
     /// LSP configuration
@@ -118,6 +123,7 @@ impl Default for EngineOptions {
             call_graph_enabled: false,
             persist_enabled: false,
             watch_enabled: false,
+            remote_enabled: false,
             streaming_config: StreamingConfig::default(),
             lsp_config: LspConfig::default(),
             neural_config: NeuralConfig::default(),

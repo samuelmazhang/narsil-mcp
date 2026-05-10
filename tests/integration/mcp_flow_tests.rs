@@ -192,27 +192,51 @@ fn test_all_tools_have_metadata() {
     );
 }
 
-/// Test that presets respect performance budgets
+/// Full preset bypasses the performance budget — it's an explicit
+/// "expose everything" directive (see issue #23). Non-Full presets continue to
+/// honour `max_tool_count`.
 #[test]
-fn test_performance_budget_with_presets() {
+fn test_full_preset_bypasses_performance_budget() {
     use narsil_mcp::config::schema::ToolConfig;
 
     let client_info = ClientInfo {
-        name: "claude-desktop".to_string(), // Full preset
+        name: "claude-desktop".to_string(), // resolves to Full preset
         version: None,
     };
 
     let mut config = ToolConfig::default();
-    config.performance.max_tool_count = 30; // Strict budget
+    config.performance.max_tool_count = 30; // would otherwise truncate
 
     let options = EngineOptions::default();
     let filter = ToolFilter::new(config, &options, Some(client_info));
     let enabled_tools = filter.get_enabled_tools();
 
-    // Should respect budget even with full preset
+    // Full preset must surface more than the cap would allow.
+    assert!(
+        enabled_tools.len() > 30,
+        "Full preset should bypass max_tool_count, got {} tools",
+        enabled_tools.len()
+    );
+}
+
+/// Non-Full presets must continue to respect the budget.
+#[test]
+fn test_non_full_preset_respects_performance_budget() {
+    use narsil_mcp::config::schema::ToolConfig;
+
+    let mut config = ToolConfig {
+        preset: Some("balanced".to_string()),
+        ..Default::default()
+    };
+    config.performance.max_tool_count = 30;
+
+    let options = EngineOptions::default();
+    let filter = ToolFilter::new(config, &options, None);
+    let enabled_tools = filter.get_enabled_tools();
+
     assert!(
         enabled_tools.len() <= 30,
-        "Performance budget should override preset, got {} tools",
+        "Balanced preset should respect max_tool_count, got {} tools",
         enabled_tools.len()
     );
 }

@@ -224,9 +224,11 @@ fn test_filter_by_tool_override_enabled() {
 
 #[test]
 fn test_performance_budget_respected() {
-    // Set max_tool_count to 10
+    // Set max_tool_count to 10. Use the Balanced preset because Full bypasses
+    // the cap by design (see issue #23 — "Full" means "give me everything").
     let mut config = ToolConfig::default();
     config.performance.max_tool_count = 10;
+    config.preset = Some("balanced".to_string());
 
     let options = EngineOptions::default();
     let filter = ToolFilter::new(config, &options, None);

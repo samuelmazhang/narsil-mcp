@@ -301,6 +301,7 @@ async fn main() -> Result<()> {
         call_graph_enabled: server_args.call_graph,
         persist_enabled: server_args.persist,
         watch_enabled: server_args.watch,
+        remote_enabled: server_args.remote,
         streaming_config,
         lsp_config,
         neural_config,

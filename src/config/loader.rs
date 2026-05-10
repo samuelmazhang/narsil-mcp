@@ -6,7 +6,7 @@
 /// 3. Project config (.narsil.yaml in repo root)
 /// 4. User config (~/.config/narsil-mcp/config.yaml)
 /// 5. Default config (built-in)
-use super::schema::{ToolConfig, ToolOverride};
+use super::schema::{PerformanceConfig, ToolConfig, ToolOverride};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -54,7 +54,7 @@ tools:
       description: "Graph visualization"
   overrides: {}
 performance:
-  max_tool_count: 76
+  max_tool_count: 128
   startup_latency_ms: 10
   filtering_latency_ms: 1
 "#;
@@ -226,14 +226,17 @@ impl ConfigLoader {
             base.tools.overrides.insert(name, override_config);
         }
 
-        // Merge performance config (overlay takes precedence)
-        if overlay.performance.max_tool_count != 76 {
+        // Merge performance config (overlay takes precedence over the default).
+        if overlay.performance.max_tool_count != PerformanceConfig::default().max_tool_count {
             base.performance.max_tool_count = overlay.performance.max_tool_count;
         }
-        if overlay.performance.startup_latency_ms != 10 {
+        if overlay.performance.startup_latency_ms != PerformanceConfig::default().startup_latency_ms
+        {
             base.performance.startup_latency_ms = overlay.performance.startup_latency_ms;
         }
-        if overlay.performance.filtering_latency_ms != 1 {
+        if overlay.performance.filtering_latency_ms
+            != PerformanceConfig::default().filtering_latency_ms
+        {
             base.performance.filtering_latency_ms = overlay.performance.filtering_latency_ms;
         }
 
@@ -245,45 +248,64 @@ impl ConfigLoader {
         base
     }
 
-    /// Apply environment variable overrides
+    /// Apply environment variable overrides.
+    ///
+    /// Each variable is treated as **unset** when its value is empty or
+    /// whitespace-only. This avoids the trap where a shell wrapper that always
+    /// `export`s `NARSIL_ENABLED_CATEGORIES` (even when no categories are
+    /// requested) used to disable every category and leave only the handful of
+    /// flag-less tools visible — see issue #23.
     fn apply_env_overrides(config: &mut ToolConfig) -> Result<()> {
         use std::env;
 
         // NARSIL_PRESET - Apply a preset configuration
-        if let Ok(preset) = env::var("NARSIL_PRESET") {
+        if let Some(preset) = env::var("NARSIL_PRESET").ok().and_then(non_empty) {
             config.preset = Some(preset);
         }
 
         // NARSIL_ENABLED_CATEGORIES - comma-separated list of categories to enable
-        if let Ok(categories) = env::var("NARSIL_ENABLED_CATEGORIES") {
-            // Disable all categories first
-            for cat in config.tools.categories.values_mut() {
-                cat.enabled = false;
-            }
+        if let Some(categories) = env::var("NARSIL_ENABLED_CATEGORIES")
+            .ok()
+            .and_then(non_empty)
+        {
+            let names: Vec<String> = categories
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
 
-            // Enable specified categories
-            for name in categories.split(',').map(|s| s.trim()) {
-                if let Some(cat) = config.tools.categories.get_mut(name) {
-                    cat.enabled = true;
-                } else {
-                    // Create category if it doesn't exist
-                    use crate::config::schema::CategoryConfig;
-                    config.tools.categories.insert(
-                        name.to_string(),
-                        CategoryConfig {
-                            enabled: true,
-                            description: None,
-                            required_flags: vec![],
-                            config: HashMap::new(),
-                        },
-                    );
+            // Only modify the config if the caller actually named at least one
+            // category — an env var that is set but contains only commas /
+            // whitespace is treated as "unset", matching the empty-string case.
+            if !names.is_empty() {
+                // Disable all categories first
+                for cat in config.tools.categories.values_mut() {
+                    cat.enabled = false;
+                }
+
+                // Enable specified categories
+                for name in names {
+                    if let Some(cat) = config.tools.categories.get_mut(&name) {
+                        cat.enabled = true;
+                    } else {
+                        use crate::config::schema::CategoryConfig;
+                        config.tools.categories.insert(
+                            name,
+                            CategoryConfig {
+                                enabled: true,
+                                description: None,
+                                required_flags: vec![],
+                                config: HashMap::new(),
+                            },
+                        );
+                    }
                 }
             }
         }
 
         // NARSIL_DISABLED_TOOLS - comma-separated list of tools to disable
-        if let Ok(tools) = env::var("NARSIL_DISABLED_TOOLS") {
-            for name in tools.split(',').map(|s| s.trim()) {
+        if let Some(tools) = env::var("NARSIL_DISABLED_TOOLS").ok().and_then(non_empty) {
+            for name in tools.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
                 config.tools.overrides.insert(
                     name.to_string(),
                     ToolOverride {
@@ -302,6 +324,17 @@ impl ConfigLoader {
     }
 }
 
+/// Trim a value and return `Some` only if non-empty. Used to treat empty /
+/// whitespace-only environment variables as if they were unset.
+fn non_empty(s: String) -> Option<String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 impl Default for ConfigLoader {
     fn default() -> Self {
         Self::new()
@@ -312,6 +345,13 @@ impl Default for ConfigLoader {
 mod tests {
     use super::*;
     use crate::config::schema::CategoryConfig;
+    use std::sync::Mutex;
+
+    /// Tests that mutate `NARSIL_*` environment variables share process-wide
+    /// state and must run sequentially. Without this lock, parallel test
+    /// execution races between `set_var` and `apply_env_overrides` and
+    /// produces flaky failures.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_default_config_parses() {
@@ -371,6 +411,7 @@ mod tests {
     #[test]
     fn test_env_var_override() {
         use std::env;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut config = ToolConfig::default();
         config.tools.categories.insert(
@@ -402,5 +443,120 @@ mod tests {
 
         // Clean up
         env::remove_var("NARSIL_ENABLED_CATEGORIES");
+    }
+
+    /// Helper that builds a config with the standard set of categories all enabled.
+    fn config_with_all_default_categories() -> ToolConfig {
+        let mut config = ToolConfig::default();
+        for name in ["Repository", "Symbols", "Search", "Git", "Lsp", "Remote"] {
+            config.tools.categories.insert(
+                name.to_string(),
+                CategoryConfig {
+                    enabled: true,
+                    description: None,
+                    required_flags: vec![],
+                    config: HashMap::new(),
+                },
+            );
+        }
+        config
+    }
+
+    /// Issue #23 root cause: an empty `NARSIL_ENABLED_CATEGORIES` (e.g. set by a
+    /// shell wrapper that always exports the var even when no categories are
+    /// requested) used to take the disable-everything code path, leaving the
+    /// server with zero enabled categories and thus only flag-less tools visible.
+    #[test]
+    fn test_env_var_empty_categories_is_noop() {
+        use std::env;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = config_with_all_default_categories();
+        env::set_var("NARSIL_ENABLED_CATEGORIES", "");
+
+        ConfigLoader::apply_env_overrides(&mut config).unwrap();
+
+        env::remove_var("NARSIL_ENABLED_CATEGORIES");
+
+        for cat in ["Repository", "Symbols", "Search", "Git", "Lsp", "Remote"] {
+            assert!(
+                config.tools.categories.get(cat).unwrap().enabled,
+                "{cat} should remain enabled when NARSIL_ENABLED_CATEGORIES is empty"
+            );
+        }
+    }
+
+    /// Whitespace-only env value should behave the same as empty.
+    #[test]
+    fn test_env_var_whitespace_only_categories_is_noop() {
+        use std::env;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = config_with_all_default_categories();
+        env::set_var("NARSIL_ENABLED_CATEGORIES", "   ");
+
+        ConfigLoader::apply_env_overrides(&mut config).unwrap();
+
+        env::remove_var("NARSIL_ENABLED_CATEGORIES");
+
+        assert!(config.tools.categories.get("Repository").unwrap().enabled);
+        assert!(config.tools.categories.get("Symbols").unwrap().enabled);
+    }
+
+    /// Empty segments inside a comma list should be skipped, not inserted as
+    /// empty-named categories.
+    #[test]
+    fn test_env_var_categories_filters_empty_segments() {
+        use std::env;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = config_with_all_default_categories();
+        env::set_var("NARSIL_ENABLED_CATEGORIES", "Repository,,Symbols,");
+
+        ConfigLoader::apply_env_overrides(&mut config).unwrap();
+
+        env::remove_var("NARSIL_ENABLED_CATEGORIES");
+
+        assert!(config.tools.categories.get("Repository").unwrap().enabled);
+        assert!(config.tools.categories.get("Symbols").unwrap().enabled);
+        assert!(!config.tools.categories.get("Search").unwrap().enabled);
+        // No phantom empty-named entry should be inserted.
+        assert!(!config.tools.categories.contains_key(""));
+    }
+
+    /// `NARSIL_PRESET=""` should be ignored, not stored as a literal empty preset
+    /// string (which would later parse as Preset::Full but with confusing
+    /// telemetry).
+    #[test]
+    fn test_env_var_preset_skips_empty() {
+        use std::env;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = ToolConfig::default();
+        env::set_var("NARSIL_PRESET", "");
+
+        ConfigLoader::apply_env_overrides(&mut config).unwrap();
+
+        env::remove_var("NARSIL_PRESET");
+
+        assert!(
+            config.preset.is_none(),
+            "empty NARSIL_PRESET should leave preset unset, got {:?}",
+            config.preset
+        );
+    }
+
+    /// `NARSIL_DISABLED_TOOLS` should drop empty segments; an empty list should
+    /// not insert an empty-named override.
+    #[test]
+    fn test_env_var_disabled_tools_filters_empty() {
+        use std::env;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = ToolConfig::default();
+        env::set_var("NARSIL_DISABLED_TOOLS", "foo,,bar,");
+
+        ConfigLoader::apply_env_overrides(&mut config).unwrap();
+
+        env::remove_var("NARSIL_DISABLED_TOOLS");
+
+        assert!(config.tools.overrides.contains_key("foo"));
+        assert!(config.tools.overrides.contains_key("bar"));
+        assert!(!config.tools.overrides.contains_key(""));
     }
 }

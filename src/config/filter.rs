@@ -73,14 +73,24 @@ impl ToolFilter {
         if options.neural_config.enabled {
             flags.insert(FeatureFlag::Neural);
         }
-        // Remote flag would be set via engine options if there's a remote field
-        // For now, we'll check the neural_config backend or other indicators
-        // This can be extended as needed
+        if options.remote_enabled {
+            flags.insert(FeatureFlag::Remote);
+        }
+        #[cfg(feature = "graph")]
+        if options.graph_enabled {
+            flags.insert(FeatureFlag::Graph);
+        }
 
         flags
     }
 
-    /// Get the list of enabled tools based on configuration and flags
+    /// Get the list of enabled tools based on configuration and flags.
+    ///
+    /// The `Full` preset is treated as an explicit "expose everything"
+    /// directive: it bypasses the `max_tool_count` cap entirely so the user
+    /// gets the full registry (subject to the per-tool feature-flag check).
+    /// Other presets (Minimal, Balanced, SecurityFocused) honour the cap so
+    /// editor token-budgets stay predictable.
     pub fn get_enabled_tools(&self) -> Vec<&'static str> {
         let mut enabled_tools = Vec::new();
 
@@ -91,7 +101,11 @@ impl ToolFilter {
             }
         }
 
-        // Apply performance budget
+        if matches!(self.preset, Preset::Full) {
+            return enabled_tools;
+        }
+
+        // Apply performance budget for non-Full presets.
         self.apply_performance_budget(enabled_tools)
     }
 
@@ -121,8 +135,11 @@ impl ToolFilter {
         }
         // If preset is Full (empty whitelist), all tools are allowed
 
-        // 4. Check if tool's category is enabled
-        let category_name = format!("{:?}", metadata.category);
+        // 4. Check if tool's category is enabled.
+        // Use Display, not Debug — Debug emits the raw variant identifier
+        // (`Lsp`) while the YAML/config key is the canonical name (`LSP`),
+        // so Debug silently misses LSP-category overrides. See issue #23.
+        let category_name = metadata.category.to_string();
         if let Some(category_config) = self.config.tools.categories.get(&category_name) {
             if !category_config.enabled {
                 return false; // Category disabled
@@ -189,6 +206,7 @@ mod tests {
             call_graph_enabled: true,
             persist_enabled: true,
             watch_enabled: true,
+            remote_enabled: true,
             lsp_config: crate::lsp::LspConfig {
                 enabled: true,
                 ..Default::default()
@@ -197,18 +215,25 @@ mod tests {
                 enabled: true,
                 ..Default::default()
             },
+            #[cfg(feature = "graph")]
+            graph_enabled: true,
             ..Default::default()
         };
 
         let flags = ToolFilter::convert_engine_options(&options);
 
-        assert_eq!(flags.len(), 6);
+        // 7 baseline flags + Graph when the graph feature is compiled in.
+        let expected_count = if cfg!(feature = "graph") { 8 } else { 7 };
+        assert_eq!(flags.len(), expected_count);
         assert!(flags.contains(&FeatureFlag::Git));
         assert!(flags.contains(&FeatureFlag::CallGraph));
         assert!(flags.contains(&FeatureFlag::Persist));
         assert!(flags.contains(&FeatureFlag::Watch));
         assert!(flags.contains(&FeatureFlag::Lsp));
         assert!(flags.contains(&FeatureFlag::Neural));
+        assert!(flags.contains(&FeatureFlag::Remote));
+        #[cfg(feature = "graph")]
+        assert!(flags.contains(&FeatureFlag::Graph));
     }
 
     #[test]
@@ -328,6 +353,9 @@ mod tests {
     fn test_performance_budget_prioritizes_low_impact() {
         let mut config = ToolConfig::default();
         config.performance.max_tool_count = 10;
+        // Use a non-Full preset so the budget is actually applied —
+        // Full preset bypasses the cap by design.
+        config.preset = Some("balanced".to_string());
 
         let options = EngineOptions {
             git_enabled: true,
@@ -364,6 +392,122 @@ mod tests {
             "Should prioritize low-impact tools: low={}, high={}",
             low_impact_count,
             high_impact_count
+        );
+    }
+
+    /// Issue #23: an LSP-category tool's category lookup must succeed via the
+    /// canonical `Display` representation of `ToolCategory::Lsp` (which is
+    /// `"LSP"`). Using `Debug` produces `"Lsp"`, silently misses the YAML key,
+    /// and leaves Lsp tools unaffected by `enabled: false` overrides.
+    #[test]
+    fn test_lsp_category_lookup_uses_display() {
+        let mut config = ToolConfig::default();
+        config.tools.categories.insert(
+            "LSP".to_string(),
+            CategoryConfig {
+                enabled: false,
+                description: None,
+                required_flags: vec![],
+                config: HashMap::new(),
+            },
+        );
+        // Need a non-Full preset so the LSP tool is filtered by category, not
+        // by Full's "all-or-nothing" semantics.
+        config.preset = Some("full".to_string());
+
+        let options = EngineOptions {
+            lsp_config: crate::lsp::LspConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let filter = ToolFilter::new(config, &options, None);
+
+        // get_hover_info is in ToolCategory::Lsp.
+        let meta = TOOL_METADATA
+            .get("get_hover_info")
+            .expect("get_hover_info metadata exists");
+        assert!(
+            !filter.is_tool_enabled("get_hover_info", meta),
+            "LSP-category tool should be filtered out when LSP category is disabled"
+        );
+    }
+
+    /// Issue #23: `convert_engine_options` must propagate `remote_enabled` to
+    /// `FeatureFlag::Remote` so Remote-category tools can surface when
+    /// `--remote` is passed.
+    #[test]
+    fn test_convert_engine_options_propagates_remote() {
+        let options = EngineOptions {
+            remote_enabled: true,
+            ..Default::default()
+        };
+        let flags = ToolFilter::convert_engine_options(&options);
+        assert!(
+            flags.contains(&FeatureFlag::Remote),
+            "FeatureFlag::Remote must be set when EngineOptions.remote_enabled is true"
+        );
+    }
+
+    /// Issue #23: under `feature = "graph"`, `convert_engine_options` must
+    /// propagate `graph_enabled` to `FeatureFlag::Graph` so SPARQL/CCG tools
+    /// can surface when `--graph` is passed.
+    #[cfg(feature = "graph")]
+    #[test]
+    fn test_convert_engine_options_propagates_graph() {
+        let options = EngineOptions {
+            graph_enabled: true,
+            ..Default::default()
+        };
+        let flags = ToolFilter::convert_engine_options(&options);
+        assert!(
+            flags.contains(&FeatureFlag::Graph),
+            "FeatureFlag::Graph must be set when EngineOptions.graph_enabled is true"
+        );
+    }
+
+    /// Issue #23: the Full preset should expose every registered tool whose
+    /// feature requirements are met, regardless of `max_tool_count`. Without
+    /// this bypass, `max_tool_count: 76` silently truncated the 90-tool registry
+    /// even when the user explicitly asked for the Full preset.
+    #[test]
+    fn test_full_preset_bypasses_performance_budget() {
+        let mut config = ToolConfig::default();
+        // Set a tiny budget that would otherwise truncate.
+        config.performance.max_tool_count = 5;
+        config.preset = Some("full".to_string());
+
+        let options = EngineOptions::default();
+        let filter = ToolFilter::new(config, &options, None);
+        let enabled = filter.get_enabled_tools();
+
+        // Full preset returns all tools whose required_flags are satisfied;
+        // with no flags enabled, only flag-less tools surface — but that count
+        // is far larger than the tiny `max_tool_count` budget would allow.
+        assert!(
+            enabled.len() > 5,
+            "Full preset must bypass max_tool_count cap; got {} tools",
+            enabled.len()
+        );
+    }
+
+    /// Issue #23: with `--remote` enabled, the `add_remote_repo` tool should
+    /// actually surface in `get_enabled_tools`. Without `FeatureFlag::Remote`
+    /// being propagated from `EngineOptions.remote_enabled`, it never did.
+    #[test]
+    fn test_remote_tool_surfaces_with_remote_flag() {
+        let config = ToolConfig::default();
+        let options = EngineOptions {
+            remote_enabled: true,
+            ..Default::default()
+        };
+        let filter = ToolFilter::new(config, &options, None);
+        let enabled = filter.get_enabled_tools();
+        assert!(
+            enabled.contains(&"add_remote_repo"),
+            "add_remote_repo should surface when --remote is enabled; got {} tools",
+            enabled.len()
         );
     }
 }
