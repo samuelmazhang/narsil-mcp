@@ -42,7 +42,7 @@ mod tool_metadata;
 mod type_inference;
 mod validation;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser as ClapParser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -74,16 +74,23 @@ enum Commands {
 
 #[derive(ClapParser, Debug)]
 struct ServerArgs {
-    /// Paths to repositories or directories to index
-    #[arg(short, long)]
+    /// Paths to repositories or directories to index.
+    /// Comma-separated when set via `NARSIL_REPOS`
+    /// (e.g. `NARSIL_REPOS=/path/a,/path/b`).
+    #[arg(short, long, env = "NARSIL_REPOS", value_delimiter = ',')]
     repos: Vec<PathBuf>,
 
     /// Path to persistent index storage
-    #[arg(short, long, default_value = "~/.cache/narsil-mcp")]
+    #[arg(
+        short,
+        long,
+        env = "NARSIL_INDEX_PATH",
+        default_value = "~/.cache/narsil-mcp"
+    )]
     index_path: PathBuf,
 
     /// Enable verbose logging (to stderr)
-    #[arg(short, long)]
+    #[arg(short, long, env = "NARSIL_VERBOSE")]
     verbose: bool,
 
     /// Re-index all repositories on startup
@@ -91,83 +98,83 @@ struct ServerArgs {
     reindex: bool,
 
     /// Enable watch mode for incremental updates
-    #[arg(short, long)]
+    #[arg(short, long, env = "NARSIL_WATCH")]
     watch: bool,
 
     /// Enable call graph analysis (slower initial index)
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_CALL_GRAPH")]
     call_graph: bool,
 
     /// Enable git integration
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_GIT")]
     git: bool,
 
     /// Auto-discover repositories in a directory
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_DISCOVER")]
     discover: Option<PathBuf>,
 
     /// Enable index persistence (save/load index to/from disk)
-    #[arg(short, long)]
+    #[arg(short, long, env = "NARSIL_PERSIST")]
     persist: bool,
 
     /// Enable LSP integration for enhanced code intelligence (requires language servers installed)
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_LSP")]
     lsp: bool,
 
     /// Enable streaming responses for large result sets
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_STREAMING")]
     streaming: bool,
 
     /// Enable remote GitHub repository support (uses GITHUB_TOKEN env var for auth)
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_REMOTE")]
     remote: bool,
 
     /// Enable neural embeddings for semantic search (requires EMBEDDING_API_KEY, VOYAGE_API_KEY, or OPENAI_API_KEY)
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_NEURAL")]
     neural: bool,
 
     /// Neural embedding backend: "api" (default) or "onnx"
-    #[arg(long, default_value = "api")]
+    #[arg(long, env = "NARSIL_NEURAL_BACKEND", default_value = "api")]
     neural_backend: String,
 
     /// Neural embedding model name (e.g., "voyage-code-2", "text-embedding-3-small")
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_NEURAL_MODEL")]
     neural_model: Option<String>,
 
     /// Neural embedding dimension (auto-detected from model if not specified)
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_NEURAL_DIMENSION")]
     neural_dimension: Option<usize>,
 
     /// Enable HTTP server for visualization frontend
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_HTTP")]
     http: bool,
 
     /// HTTP server port (default: 3000)
-    #[arg(long, default_value = "3000")]
+    #[arg(long, env = "NARSIL_HTTP_PORT", default_value = "3000")]
     http_port: u16,
 
     /// Tool preset (minimal, balanced, full, security-focused)
     /// Overrides the preset from config file
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_PRESET")]
     preset: Option<String>,
 
     /// Disable analysis caching (caching is enabled by default)
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_NO_CACHE")]
     no_cache: bool,
 
     /// Cache TTL in seconds (default: 1800 = 30 minutes)
-    #[arg(long, default_value = "1800")]
+    #[arg(long, env = "NARSIL_CACHE_TTL", default_value = "1800")]
     cache_ttl: u64,
 
     /// Enable RDF knowledge graph storage for SPARQL queries and CCG export.
     /// NOTE: Binary must be built with --features graph for this to work.
     /// If unsure, check the startup log for warnings.
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_GRAPH")]
     graph: bool,
 
     /// Path for knowledge graph storage (default: <index_path>/graph).
     /// Only used when --graph is enabled and the graph feature is compiled in.
-    #[arg(long)]
+    #[arg(long, env = "NARSIL_GRAPH_PATH")]
     graph_path: Option<PathBuf>,
 }
 
@@ -201,23 +208,9 @@ async fn main() -> Result<()> {
 
     info!("Starting narsil-mcp v{}", env!("CARGO_PKG_VERSION"));
 
-    // Handle repository discovery if requested
-    let mut repos = server_args.repos;
-    if let Some(discover_path) = server_args.discover {
-        info!("Discovering repositories in: {:?}", discover_path);
-        let discovered = repo::discover_repos(&discover_path, 3)?;
-        info!("Found {} repositories", discovered.len());
-        repos.extend(discovered);
-    }
-
-    // Expand "." to current directory
-    if let Ok(cwd) = std::env::current_dir() {
-        let dot_path = Path::new(".");
-
-        if let Some(path) = repos.iter_mut().find(|p| *p == dot_path) {
-            *path = cwd;
-        }
-    }
+    // Resolve the final list of repository paths from CLI args, env, and
+    // discovery. Auto-falls back to cwd when nothing is specified.
+    let repos = resolve_repo_paths(server_args.repos.clone(), server_args.discover.clone())?;
 
     info!("Repos to index: {:?}", repos);
 
@@ -377,4 +370,214 @@ async fn main() -> Result<()> {
     server.run().await?;
 
     Ok(())
+}
+
+/// Resolve the final set of repository paths to index from CLI input.
+///
+/// Order of operations:
+/// 1. Start with `cli_repos` (populated from `--repos` or `NARSIL_REPOS`).
+/// 2. If `discover` is set, walk that directory and append discovered repos.
+/// 3. Replace any entry equal to `"."` with the current working directory.
+/// 4. If the list is still empty, default to `[cwd]` so a bare invocation
+///    indexes the project the user is sitting in (issue #22).
+/// 5. Drop paths that do not exist on disk, logging each at WARN. The
+///    surviving list may be empty — the caller decides how to react (the
+///    engine will simply have nothing to index).
+fn resolve_repo_paths(cli_repos: Vec<PathBuf>, discover: Option<PathBuf>) -> Result<Vec<PathBuf>> {
+    let mut repos = cli_repos;
+
+    if let Some(discover_path) = discover {
+        info!("Discovering repositories in: {:?}", discover_path);
+        let discovered = repo::discover_repos(&discover_path, 3)?;
+        info!("Found {} repositories via discovery", discovered.len());
+        repos.extend(discovered);
+    }
+
+    // Expand "." entries to the current working directory.
+    if let Ok(cwd) = std::env::current_dir() {
+        let dot = Path::new(".");
+        for path in repos.iter_mut() {
+            if path.as_path() == dot {
+                *path = cwd.clone();
+            }
+        }
+    }
+
+    // Fall back to the current working directory when no repos are specified
+    // anywhere — bare `narsil-mcp` should "just work" inside a project.
+    if repos.is_empty() {
+        let cwd = std::env::current_dir().context(
+            "--repos was not specified and the current working directory is unavailable",
+        )?;
+        info!(
+            "No --repos / NARSIL_REPOS / --discover specified; defaulting to cwd: {:?}",
+            cwd
+        );
+        repos.push(cwd);
+    }
+
+    // Drop missing paths and warn the user — surviving paths are returned.
+    let validated: Vec<PathBuf> = repos
+        .into_iter()
+        .filter(|p| {
+            if p.exists() {
+                true
+            } else {
+                warn!("Repository path does not exist, skipping: {:?}", p);
+                false
+            }
+        })
+        .collect();
+
+    Ok(validated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Tests that mutate `NARSIL_*` env vars share process-wide state and
+    /// must run sequentially. Without this lock, parallel test execution
+    /// races between `set_var` and `Args::try_parse_from`.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn parse_with_env<F: FnOnce()>(setup: F) -> Args {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Ensure no NARSIL_* leak in from outside the test:
+        for var in [
+            "NARSIL_REPOS",
+            "NARSIL_INDEX_PATH",
+            "NARSIL_VERBOSE",
+            "NARSIL_WATCH",
+            "NARSIL_CALL_GRAPH",
+            "NARSIL_GIT",
+            "NARSIL_DISCOVER",
+            "NARSIL_PERSIST",
+            "NARSIL_LSP",
+            "NARSIL_STREAMING",
+            "NARSIL_REMOTE",
+            "NARSIL_NEURAL",
+            "NARSIL_NEURAL_BACKEND",
+            "NARSIL_NEURAL_MODEL",
+            "NARSIL_NEURAL_DIMENSION",
+            "NARSIL_HTTP",
+            "NARSIL_HTTP_PORT",
+            "NARSIL_PRESET",
+            "NARSIL_NO_CACHE",
+            "NARSIL_CACHE_TTL",
+            "NARSIL_GRAPH",
+            "NARSIL_GRAPH_PATH",
+        ] {
+            std::env::remove_var(var);
+        }
+        setup();
+        Args::try_parse_from(["narsil-mcp"]).expect("CLI parse should succeed")
+    }
+
+    #[test]
+    fn neural_model_is_settable_via_env() {
+        let args = parse_with_env(|| {
+            std::env::set_var("NARSIL_NEURAL_MODEL", "voyage-code-2");
+        });
+        std::env::remove_var("NARSIL_NEURAL_MODEL");
+        assert_eq!(args.server.neural_model.as_deref(), Some("voyage-code-2"));
+    }
+
+    #[test]
+    fn neural_dimension_is_settable_via_env() {
+        let args = parse_with_env(|| {
+            std::env::set_var("NARSIL_NEURAL_DIMENSION", "1024");
+        });
+        std::env::remove_var("NARSIL_NEURAL_DIMENSION");
+        assert_eq!(args.server.neural_dimension, Some(1024));
+    }
+
+    #[test]
+    fn boolean_flags_are_settable_via_env() {
+        let args = parse_with_env(|| {
+            std::env::set_var("NARSIL_GIT", "true");
+            std::env::set_var("NARSIL_CALL_GRAPH", "true");
+            std::env::set_var("NARSIL_REMOTE", "true");
+            std::env::set_var("NARSIL_NEURAL", "true");
+        });
+        for var in [
+            "NARSIL_GIT",
+            "NARSIL_CALL_GRAPH",
+            "NARSIL_REMOTE",
+            "NARSIL_NEURAL",
+        ] {
+            std::env::remove_var(var);
+        }
+        assert!(args.server.git);
+        assert!(args.server.call_graph);
+        assert!(args.server.remote);
+        assert!(args.server.neural);
+    }
+
+    #[test]
+    fn repos_are_settable_via_env_comma_separated() {
+        let args = parse_with_env(|| {
+            std::env::set_var("NARSIL_REPOS", "/tmp/a,/tmp/b,/tmp/c");
+        });
+        std::env::remove_var("NARSIL_REPOS");
+        assert_eq!(
+            args.server.repos,
+            vec![
+                PathBuf::from("/tmp/a"),
+                PathBuf::from("/tmp/b"),
+                PathBuf::from("/tmp/c"),
+            ]
+        );
+    }
+
+    #[test]
+    fn http_port_is_settable_via_env() {
+        let args = parse_with_env(|| {
+            std::env::set_var("NARSIL_HTTP_PORT", "4444");
+        });
+        std::env::remove_var("NARSIL_HTTP_PORT");
+        assert_eq!(args.server.http_port, 4444);
+    }
+
+    #[test]
+    fn cli_args_override_env_vars() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("NARSIL_NEURAL_MODEL", "from-env");
+        let args = Args::try_parse_from(["narsil-mcp", "--neural-model", "from-cli"]).unwrap();
+        std::env::remove_var("NARSIL_NEURAL_MODEL");
+        assert_eq!(args.server.neural_model.as_deref(), Some("from-cli"));
+    }
+
+    #[test]
+    fn resolve_repo_paths_falls_back_to_cwd_when_empty() {
+        let resolved = resolve_repo_paths(vec![], None).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(resolved, vec![cwd]);
+    }
+
+    #[test]
+    fn resolve_repo_paths_filters_missing_paths() {
+        let cwd = std::env::current_dir().unwrap();
+        let nonexistent = PathBuf::from("/this/path/definitely/does/not/exist/narsil-test-zzz");
+        assert!(!nonexistent.exists());
+
+        let resolved = resolve_repo_paths(vec![cwd.clone(), nonexistent], None).unwrap();
+        // The missing path is dropped; the existing one survives.
+        assert_eq!(resolved, vec![cwd]);
+    }
+
+    #[test]
+    fn resolve_repo_paths_expands_dot_to_cwd() {
+        let resolved = resolve_repo_paths(vec![PathBuf::from(".")], None).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(resolved, vec![cwd]);
+    }
+
+    #[test]
+    fn resolve_repo_paths_keeps_explicit_paths() {
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = resolve_repo_paths(vec![cwd.clone()], None).unwrap();
+        assert_eq!(resolved, vec![cwd]);
+    }
 }

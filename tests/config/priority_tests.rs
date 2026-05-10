@@ -66,6 +66,13 @@ fn test_default_config_loads() {
 
 #[test]
 fn test_user_config_overrides_default() {
+    // ConfigLoader::load() reads NARSIL_* env vars; serialize against tests
+    // that set them so we are not affected by mid-test mutations.
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::remove_var("NARSIL_PRESET");
+    std::env::remove_var("NARSIL_ENABLED_CATEGORIES");
+    std::env::remove_var("NARSIL_DISABLED_TOOLS");
+
     let user_config_content = r#"
 version: "1.0"
 tools:
@@ -92,6 +99,10 @@ tools:
 
 #[test]
 fn test_project_config_overrides_user_config() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::remove_var("NARSIL_PRESET");
+    std::env::remove_var("NARSIL_ENABLED_CATEGORIES");
+    std::env::remove_var("NARSIL_DISABLED_TOOLS");
     let user_config_content = r#"
 version: "1.0"
 tools:
@@ -253,6 +264,10 @@ tools:
 
 #[test]
 fn test_config_merging_preserves_both_tools() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::remove_var("NARSIL_PRESET");
+    std::env::remove_var("NARSIL_ENABLED_CATEGORIES");
+    std::env::remove_var("NARSIL_DISABLED_TOOLS");
     let user_config_content = r#"
 version: "1.0"
 tools:
@@ -293,6 +308,10 @@ tools:
 
 #[test]
 fn test_invalid_config_returns_error() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::remove_var("NARSIL_PRESET");
+    std::env::remove_var("NARSIL_ENABLED_CATEGORIES");
+    std::env::remove_var("NARSIL_DISABLED_TOOLS");
     // Use a config with a type mismatch - 'enabled' should be a bool, not a string
     let invalid_config_content = r#"
 version: "1.0"
@@ -337,6 +356,10 @@ fn test_missing_user_config_falls_back_to_default() {
 
 #[test]
 fn test_performance_budget_in_config() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::remove_var("NARSIL_PRESET");
+    std::env::remove_var("NARSIL_ENABLED_CATEGORIES");
+    std::env::remove_var("NARSIL_DISABLED_TOOLS");
     let config_content = r#"
 version: "1.0"
 tools:
@@ -363,6 +386,10 @@ performance:
 
 #[test]
 fn test_category_config_in_user_config() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::remove_var("NARSIL_PRESET");
+    std::env::remove_var("NARSIL_ENABLED_CATEGORIES");
+    std::env::remove_var("NARSIL_DISABLED_TOOLS");
     let config_content = r#"
 version: "1.0"
 tools:
