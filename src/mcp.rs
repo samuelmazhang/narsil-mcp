@@ -18,6 +18,10 @@ const MCP_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "narsil-mcp";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Maximum size of a single JSON-RPC message (10 MB).
+/// Prevents memory exhaustion from oversized messages.
+const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct JsonRpcRequest {
     jsonrpc: String,
@@ -141,6 +145,29 @@ impl McpServer {
             if bytes_read == 0 {
                 info!("EOF received, shutting down");
                 break;
+            }
+
+            // Reject oversized messages to prevent memory exhaustion
+            if line.len() > MAX_MESSAGE_SIZE {
+                tracing::warn!(
+                    "Rejecting oversized message: {} bytes (max {})",
+                    line.len(),
+                    MAX_MESSAGE_SIZE
+                );
+                let error_response = json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": {
+                        "code": -32600,
+                        "message": format!("Message too large: {} bytes exceeds {} byte limit", line.len(), MAX_MESSAGE_SIZE)
+                    }
+                });
+                let response_str = serde_json::to_string(&error_response)?;
+                stdout
+                    .write_all(format!("{}\n", response_str).as_bytes())
+                    .await?;
+                stdout.flush().await?;
+                continue;
             }
 
             let trimmed = line.trim();
@@ -658,5 +685,14 @@ mod tests {
         // Also test with None
         let no_override: Option<String> = None;
         assert!(no_override.is_none());
+    }
+
+    #[test]
+    fn test_max_message_size_is_reasonable() {
+        // 10 MB should be more than enough for any legitimate JSON-RPC message
+        let size = MAX_MESSAGE_SIZE;
+        assert_eq!(size, 10 * 1024 * 1024);
+        assert!(size >= 1024 * 1024, "Should be at least 1 MB");
+        assert!(size <= 100 * 1024 * 1024, "Should not exceed 100 MB");
     }
 }

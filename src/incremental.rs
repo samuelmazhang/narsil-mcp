@@ -339,10 +339,24 @@ impl MerkleTree {
         Ok(())
     }
 
+    /// Maximum cache file size (100 MB) to prevent loading corrupted/malicious data.
+    const MAX_CACHE_FILE_SIZE: u64 = 100 * 1024 * 1024;
+
     /// Load tree from disk
     pub fn load(path: &Path) -> Result<Self> {
+        // Check file size before reading to prevent memory exhaustion
+        let metadata = std::fs::metadata(path).context("Failed to read file metadata")?;
+        if metadata.len() > Self::MAX_CACHE_FILE_SIZE {
+            return Err(anyhow::anyhow!(
+                "Cache file too large: {} bytes (max {} bytes)",
+                metadata.len(),
+                Self::MAX_CACHE_FILE_SIZE
+            ));
+        }
+
         let data = std::fs::read(path).context("Failed to read Merkle tree")?;
-        let tree: Self = bincode::deserialize(&data).context("Failed to deserialize")?;
+        let tree: Self =
+            bincode::deserialize(&data).context("Failed to deserialize Merkle tree from cache")?;
 
         if tree.version != Self::CURRENT_VERSION {
             return Err(anyhow::anyhow!("Version mismatch"));
@@ -1632,5 +1646,27 @@ mod tests {
 
         let sorted = graph.topological_sort();
         assert!(sorted.is_err());
+    }
+
+    #[test]
+    fn test_merkle_tree_rejects_corrupted_data() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let cache_path = temp_dir.path().join("corrupted.bin");
+
+        // Write corrupted data
+        std::fs::write(&cache_path, b"this is not valid bincode data").unwrap();
+
+        let result = MerkleTree::load(&cache_path);
+        assert!(result.is_err(), "Should reject corrupted cache data");
+        assert!(
+            result.unwrap_err().to_string().contains("deserialize"),
+            "Error should mention deserialization failure"
+        );
+    }
+
+    #[test]
+    fn test_merkle_tree_max_cache_size_constant() {
+        // Verify the max cache file size is 100 MB
+        assert_eq!(MerkleTree::MAX_CACHE_FILE_SIZE, 100 * 1024 * 1024);
     }
 }

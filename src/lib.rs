@@ -24,6 +24,7 @@ pub mod symbols;
 pub mod taint;
 pub mod tool_metadata;
 pub mod type_inference;
+pub mod validation;
 
 // Knowledge graph persistence (requires oxigraph)
 #[cfg(feature = "graph")]

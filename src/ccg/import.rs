@@ -399,6 +399,10 @@ impl CcgImporter {
     pub async fn fetch_layer(&self, url: &str, layer: Layer) -> Result<ImportedLayer> {
         use std::time::Duration;
 
+        // Validate URL against SSRF attacks (block private/localhost IPs)
+        crate::validation::validate_url_for_ssrf(url, crate::validation::SsrfPolicy::BlockPrivate)
+            .map_err(|e| anyhow!("SSRF validation failed for CCG import URL: {}", e))?;
+
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(self.options.timeout_ms))
             .build()
@@ -1161,5 +1165,39 @@ mod tests {
     fn test_importer_default() {
         let importer = CcgImporter::default();
         assert_eq!(importer.options.registry_base, CCG_REGISTRY_BASE);
+    }
+
+    #[test]
+    fn test_ssrf_validation_blocks_private_ips() {
+        use crate::validation::{validate_url_for_ssrf, SsrfPolicy};
+
+        // Private IPs should be blocked for CCG import
+        assert!(
+            validate_url_for_ssrf("http://169.254.169.254/metadata", SsrfPolicy::BlockPrivate)
+                .is_err()
+        );
+        assert!(validate_url_for_ssrf(
+            "http://10.0.0.1/ccg/manifest.json",
+            SsrfPolicy::BlockPrivate
+        )
+        .is_err());
+        assert!(
+            validate_url_for_ssrf("http://localhost:8080/ccg", SsrfPolicy::BlockPrivate).is_err()
+        );
+    }
+
+    #[test]
+    fn test_ssrf_validation_allows_valid_urls() {
+        use crate::validation::{validate_url_for_ssrf, SsrfPolicy};
+
+        assert!(validate_url_for_ssrf(
+            "https://codecontextgraph.com/ccg/repo/manifest.json",
+            SsrfPolicy::BlockPrivate
+        )
+        .is_ok());
+        assert!(
+            validate_url_for_ssrf("https://github.com/owner/repo", SsrfPolicy::BlockPrivate)
+                .is_ok()
+        );
     }
 }

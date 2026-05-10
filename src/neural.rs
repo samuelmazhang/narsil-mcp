@@ -12,10 +12,8 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use url::Url;
 
 #[cfg(feature = "neural")]
 use std::path::Path;
@@ -101,110 +99,17 @@ pub fn default_dimension_for_model(model: Option<&str>) -> usize {
 // URL Validation and Security
 // ============================================================================
 
-/// Check if a hostname is localhost or a private IP address
-fn is_private_or_localhost(host: &str) -> bool {
-    // Check for localhost names
-    if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-        return true;
-    }
-
-    // Try to parse as IP address
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        match ip {
-            IpAddr::V4(ipv4) => {
-                // Private IPv4 ranges:
-                // 10.0.0.0/8
-                // 172.16.0.0/12
-                // 192.168.0.0/16
-                // 127.0.0.0/8 (loopback)
-                let octets = ipv4.octets();
-                octets[0] == 10
-                    || octets[0] == 127
-                    || (octets[0] == 172 && (16..=31).contains(&octets[1]))
-                    || (octets[0] == 192 && octets[1] == 168)
-            }
-            IpAddr::V6(ipv6) => {
-                // Private IPv6 ranges:
-                // ::1 (loopback)
-                // fc00::/7 (unique local addresses)
-                // fe80::/10 (link-local)
-                ipv6.is_loopback()
-                    || (ipv6.segments()[0] & 0xfe00) == 0xfc00
-                    || (ipv6.segments()[0] & 0xffc0) == 0xfe80
-            }
-        }
-    } else {
-        false
-    }
-}
-
-/// Validate and sanitize an embedding API endpoint URL
+/// Validate and sanitize an embedding API endpoint URL.
 ///
-/// # Security Considerations
-/// - Only allows http and https schemes to prevent SSRF via file://, ftp://, etc.
-/// - Blocks cloud metadata service URLs (169.254.169.254, fd00:ec2::254, metadata.google.internal)
-/// - Allows localhost and private IPs (users may intentionally use local embedding servers)
-/// - Logs warnings when using localhost or private IPs
-/// - Validates URL syntax to prevent malformed requests
-/// - Enforces maximum URL length (2048 characters)
+/// Delegates to the shared `validation::validate_url_for_ssrf` with `WarnOnPrivate` policy,
+/// since users may intentionally use local embedding servers.
 ///
-/// # Arguments
-/// * `url_str` - The URL string to validate
+/// # Errors
 ///
-/// # Returns
-/// * `Ok(String)` - The validated URL string
-/// * `Err` - If the URL is invalid or uses a disallowed scheme
+/// Returns an error if the URL is invalid, uses a disallowed scheme, or targets cloud metadata.
 fn validate_embedding_endpoint(url_str: &str) -> Result<String> {
-    // Validate URL length
-    if url_str.len() > 2048 {
-        bail!("URL too long: maximum 2048 characters allowed");
-    }
-
-    // Parse the URL
-    let parsed = Url::parse(url_str).with_context(|| format!("Invalid URL format: {}", url_str))?;
-
-    // Validate scheme (only http and https allowed)
-    match parsed.scheme() {
-        "http" | "https" => {}
-        scheme => {
-            bail!(
-                "Invalid URL scheme '{}': only 'http' and 'https' are allowed for embedding endpoints",
-                scheme
-            );
-        }
-    }
-
-    // Ensure URL has a host
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| anyhow::anyhow!("URL must include a hostname"))?;
-
-    // Block cloud metadata services
-    if host == "169.254.169.254" // AWS, GCP metadata service (IPv4)
-        || host == "fd00:ec2::254" // AWS metadata service (IPv6)
-        || host.starts_with("fd00:ec2:") // AWS metadata IPv6 prefix
-        || host == "metadata.google.internal" // GCP metadata service
-        || host == "metadata" // GCP short form
-        || host == "169.254.169.253"
-    // Azure IMDS (older)
-    {
-        bail!(
-            "Access to cloud metadata service URLs is blocked for security: {}",
-            host
-        );
-    }
-
-    // Check for private/localhost hosts and log warning
-    if is_private_or_localhost(host) {
-        tracing::warn!(
-            "Custom embedding endpoint uses localhost or private IP address: {}. \
-             This is allowed for local development but ensure this is intentional.",
-            host
-        );
-    }
-
-    // Return the validated URL
-    Ok(url_str.to_string())
+    crate::validation::validate_url_for_ssrf(url_str, crate::validation::SsrfPolicy::WarnOnPrivate)
+        .map_err(|e| anyhow::anyhow!("{}", e))
 }
 
 /// Trait for embedding backends

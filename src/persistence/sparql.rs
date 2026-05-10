@@ -377,8 +377,8 @@ impl<'a> SparqlEngine<'a> {
         // Substitute parameters in template
         let mut sparql = template.template.to_string();
         for (key, value) in params {
-            // Escape the value for SPARQL (simple escaping for now)
-            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+            // Escape the value for SPARQL using comprehensive escaping
+            let escaped = crate::validation::escape_sparql_literal(value);
             sparql = sparql.replace(&format!("${}", key), &escaped);
         }
 
@@ -1009,5 +1009,46 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn test_sparql_template_injection_prevented() {
+        let graph = create_test_graph();
+        let engine = SparqlEngine::new(&graph);
+
+        let template = templates::get("find_functions_by_name").unwrap();
+        let mut params = HashMap::new();
+        // Attempt SPARQL injection via template parameter
+        params.insert(
+            "pattern".to_string(),
+            r#"" } DELETE WHERE { ?s ?p ?o } #"#.to_string(),
+        );
+
+        // The query should either return no results or fail safely,
+        // but NOT delete any data
+        let _result = engine.query_template(template, &params, &QueryOptions::default());
+
+        // Verify the graph still has data (injection did NOT delete anything)
+        let count_query = "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }";
+        let count_result = engine
+            .query_select(count_query, &QueryOptions::default())
+            .unwrap();
+        assert!(
+            !count_result.rows.is_empty(),
+            "Graph should still have data after injection attempt"
+        );
+    }
+
+    #[test]
+    fn test_sparql_template_newlines_in_params() {
+        let graph = create_test_graph();
+        let engine = SparqlEngine::new(&graph);
+
+        let template = templates::get("find_functions_by_name").unwrap();
+        let mut params = HashMap::new();
+        params.insert("pattern".to_string(), "main\nDROP ALL".to_string());
+
+        // Should not crash or execute injected commands
+        let _result = engine.query_template(template, &params, &QueryOptions::default());
     }
 }

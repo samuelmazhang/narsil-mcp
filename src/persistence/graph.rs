@@ -150,6 +150,8 @@ impl KnowledgeGraph {
 
     /// Creates a named node for a code entity.
     ///
+    /// Sanitizes inputs using percent-encoding for safe IRI construction.
+    ///
     /// # Arguments
     ///
     /// * `repo` - Repository name
@@ -157,21 +159,36 @@ impl KnowledgeGraph {
     ///
     /// # Panics
     ///
-    /// Panics if the resulting IRI is invalid.
+    /// Panics if the resulting IRI is invalid (should not happen with sanitized input).
     #[must_use]
     pub fn code_node(repo: &str, path: &str) -> NamedNode {
-        // URL-encode the path to handle special characters
-        let encoded_path = path
-            .replace('/', "%2F")
-            .replace(':', "%3A")
-            .replace('#', "%23");
-        NamedNode::new(format!("{CODE_BASE_IRI}{repo}/{encoded_path}"))
-            .expect("code IRI should be valid")
+        let sanitized_repo = crate::validation::sanitize_iri_component(repo);
+        let sanitized_path = crate::validation::sanitize_iri_component(path);
+        NamedNode::new(format!("{CODE_BASE_IRI}{sanitized_repo}/{sanitized_path}"))
+            .expect("code IRI should be valid after sanitization")
+    }
+
+    /// Creates a named node for a code entity, returning `Result` instead of panicking.
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - Repository name
+    /// * `path` - Path to the symbol
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the IRI is invalid even after sanitization.
+    pub fn try_code_node(repo: &str, path: &str) -> Result<NamedNode> {
+        let sanitized_repo = crate::validation::sanitize_iri_component(repo);
+        let sanitized_path = crate::validation::sanitize_iri_component(path);
+        NamedNode::new(format!("{CODE_BASE_IRI}{sanitized_repo}/{sanitized_path}"))
+            .map_err(|e| anyhow!("Invalid code IRI for repo={}, path={}: {}", repo, path, e))
     }
 
     /// Creates a graph name for a repository.
     ///
     /// Each repository gets its own named graph for isolation.
+    /// Sanitizes the repo name for safe IRI construction.
     ///
     /// # Arguments
     ///
@@ -179,13 +196,27 @@ impl KnowledgeGraph {
     ///
     /// # Panics
     ///
-    /// Panics if the resulting IRI is invalid.
+    /// Panics if the resulting IRI is invalid (should not happen with sanitized input).
     #[must_use]
     pub fn repo_graph(repo_name: &str) -> GraphName {
+        let sanitized = crate::validation::sanitize_iri_component(repo_name);
         GraphName::NamedNode(
-            NamedNode::new(format!("{CODE_BASE_IRI}{repo_name}"))
-                .expect("repo graph IRI should be valid"),
+            NamedNode::new(format!("{CODE_BASE_IRI}{sanitized}"))
+                .expect("repo graph IRI should be valid after sanitization"),
         )
+    }
+
+    /// Creates a graph name for a repository, returning `Result` instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the IRI is invalid even after sanitization.
+    pub fn try_repo_graph(repo_name: &str) -> Result<GraphName> {
+        let sanitized = crate::validation::sanitize_iri_component(repo_name);
+        Ok(GraphName::NamedNode(
+            NamedNode::new(format!("{CODE_BASE_IRI}{sanitized}"))
+                .map_err(|e| anyhow!("Invalid repo graph IRI for {}: {}", repo_name, e))?,
+        ))
     }
 
     /// Adds a triple to the default graph.
@@ -793,5 +824,32 @@ mod tests {
 
         // Should find both 'b' and 'c' (transitive)
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_code_node_special_characters_dont_panic() {
+        // Characters that could break IRI construction should be safely encoded
+        let node = KnowledgeGraph::code_node("repo with spaces", "path/with:special#chars");
+        let iri = node.as_str();
+        assert!(iri.contains("repo%20with%20spaces"));
+        assert!(!iri.contains(' '));
+    }
+
+    #[test]
+    fn test_repo_graph_special_characters_dont_panic() {
+        // Unicode and special characters in repo names should be safely encoded
+        let graph = KnowledgeGraph::repo_graph("café-project");
+        match graph {
+            GraphName::NamedNode(node) => {
+                assert!(!node.as_str().contains("é"));
+            }
+            _ => panic!("Expected NamedNode"),
+        }
+    }
+
+    #[test]
+    fn test_try_code_node_returns_result() {
+        let result = KnowledgeGraph::try_code_node("repo", "src/main.rs");
+        assert!(result.is_ok());
     }
 }

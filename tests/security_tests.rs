@@ -123,3 +123,60 @@ async fn test_read_resource_relative_uri() {
     assert!(result.is_ok(), "Should handle URIs without file:// prefix");
     assert_eq!(result.unwrap(), "test content");
 }
+
+/// Test that get_repo_path rejects arbitrary filesystem paths not in indexed repos.
+/// Uses get_project_structure which calls get_repo_path internally.
+#[tokio::test]
+async fn test_get_repo_path_rejects_arbitrary_paths() {
+    let temp_dir = TempDir::new().unwrap();
+    let repo_path = temp_dir.path().join("test-repo");
+    fs::create_dir(&repo_path).unwrap();
+    fs::write(repo_path.join("main.rs"), "fn main() {}").unwrap();
+
+    let index_path = temp_dir.path().join("index");
+    let engine = CodeIntelEngine::new(index_path, vec![repo_path.clone()])
+        .await
+        .unwrap();
+    engine.complete_initialization().await.unwrap();
+
+    // Arbitrary filesystem paths should NOT resolve as repos via get_project_structure
+    let result = engine.get_project_structure("/etc", 3).await;
+    assert!(result.is_err(), "Should not allow /etc as a repo path");
+
+    let result = engine.get_project_structure("/tmp", 3).await;
+    assert!(result.is_err(), "Should not allow /tmp as a repo path");
+
+    // But the indexed repo name should work
+    let repo_name = repo_path.file_name().unwrap().to_str().unwrap();
+    let result = engine.get_project_structure(repo_name, 3).await;
+    assert!(
+        result.is_ok(),
+        "Indexed repo name should work: {:?}",
+        result.err()
+    );
+}
+
+/// Test that get_repo_path allows the actual indexed repo path
+#[tokio::test]
+async fn test_get_repo_path_allows_indexed_repo_path() {
+    let temp_dir = TempDir::new().unwrap();
+    let repo_path = temp_dir.path().join("my-project");
+    fs::create_dir(&repo_path).unwrap();
+    fs::write(repo_path.join("lib.rs"), "pub fn hello() {}").unwrap();
+
+    let index_path = temp_dir.path().join("index");
+    let engine = CodeIntelEngine::new(index_path, vec![repo_path.clone()])
+        .await
+        .unwrap();
+    engine.complete_initialization().await.unwrap();
+
+    // The actual indexed path should still work when passed directly
+    let result = engine
+        .get_project_structure(repo_path.to_str().unwrap(), 3)
+        .await;
+    assert!(
+        result.is_ok(),
+        "Indexed repo path should work: {:?}",
+        result.err()
+    );
+}

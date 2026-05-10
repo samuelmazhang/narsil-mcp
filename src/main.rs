@@ -40,6 +40,7 @@ mod taint;
 mod tool_handlers;
 mod tool_metadata;
 mod type_inference;
+mod validation;
 
 use anyhow::Result;
 use clap::{Parser as ClapParser, Subcommand};

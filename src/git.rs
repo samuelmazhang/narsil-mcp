@@ -51,13 +51,29 @@ pub struct GitRepo {
 }
 
 impl GitRepo {
-    /// Validate input to prevent git argument injection
+    /// Validate input to prevent git argument injection and shell metacharacter attacks.
+    ///
+    /// Blocks:
+    /// - Strings starting with `-` (git argument injection)
+    /// - Null bytes
+    /// - Shell metacharacters (`;|&`$()><{}!'"`)
+    /// - Newlines and carriage returns
     fn validate_input(input: &str, name: &str) -> Result<()> {
         if input.starts_with('-') {
             return Err(anyhow!("Invalid {}: cannot start with '-'", name));
         }
-        if input.contains('\0') {
-            return Err(anyhow!("Invalid {}: cannot contain null bytes", name));
+        // Check for null bytes, shell metacharacters, and control characters
+        const FORBIDDEN: &[char] = &[
+            ';', '|', '&', '`', '$', '(', ')', '>', '<', '{', '}', '!', '\n', '\r', '\0', '\'', '"',
+        ];
+        for ch in input.chars() {
+            if FORBIDDEN.contains(&ch) {
+                return Err(anyhow!(
+                    "Invalid {}: contains forbidden character {:?}",
+                    name,
+                    ch
+                ));
+            }
         }
         Ok(())
     }
@@ -650,9 +666,39 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("cannot contain null bytes"));
+            .contains("forbidden character"));
 
         let result = GitRepo::validate_input("function\0name", "function_name");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_git_shell_metacharacter_injection_blocked() {
+        assert!(GitRepo::validate_input(";whoami", "ref").is_err());
+        assert!(GitRepo::validate_input("branch|cat", "ref").is_err());
+        assert!(GitRepo::validate_input("branch&bg", "ref").is_err());
+        assert!(GitRepo::validate_input("`id`", "ref").is_err());
+        assert!(GitRepo::validate_input("$(whoami)", "ref").is_err());
+        assert!(GitRepo::validate_input("branch>file", "ref").is_err());
+    }
+
+    #[test]
+    fn test_git_argument_injection_variants() {
+        assert!(GitRepo::validate_input("--upload-pack=evil", "ref").is_err());
+        assert!(GitRepo::validate_input("-c", "ref").is_err());
+    }
+
+    #[test]
+    fn test_git_valid_commit_hashes_pass() {
+        assert!(GitRepo::validate_input("abc123def456", "commit").is_ok());
+        assert!(
+            GitRepo::validate_input("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", "commit").is_ok()
+        );
+    }
+
+    #[test]
+    fn test_git_valid_file_paths_pass() {
+        assert!(GitRepo::validate_input("src/main.rs", "file_path").is_ok());
+        assert!(GitRepo::validate_input("tests/integration/test.rs", "file_path").is_ok());
     }
 }

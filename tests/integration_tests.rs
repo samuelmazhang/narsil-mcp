@@ -1199,8 +1199,9 @@ mod git_tests {
 
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
-            err_msg.contains("cannot contain null bytes"),
-            "Error should mention null byte restriction"
+            err_msg.contains("forbidden character"),
+            "Error should mention forbidden character, got: {}",
+            err_msg
         );
     }
 

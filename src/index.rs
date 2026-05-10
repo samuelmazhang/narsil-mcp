@@ -816,10 +816,25 @@ impl CodeIntelEngine {
             ));
         }
 
-        // Check if it's already a path
-        let as_path = PathBuf::from(name);
-        if as_path.exists() {
-            return Ok(as_path);
+        // If input looks like a path, validate it against indexed repos
+        if name.contains('/') || name.contains('\\') {
+            let as_path = PathBuf::from(name);
+            for entry in self.repos.iter() {
+                let repo_path = &entry.value().path;
+                // Compare non-canonical paths first (fast path)
+                if as_path == *repo_path || as_path.starts_with(repo_path) {
+                    return Ok(as_path);
+                }
+                // Compare canonical forms (handles symlinks like /var -> /private/var on macOS)
+                if let (Ok(canonical), Ok(repo_canonical)) =
+                    (as_path.canonicalize(), repo_path.canonicalize())
+                {
+                    if canonical == repo_canonical || canonical.starts_with(&repo_canonical) {
+                        return Ok(canonical);
+                    }
+                }
+            }
+            // Path didn't match any indexed repo — fall through to name lookup
         }
 
         // Look up by name
