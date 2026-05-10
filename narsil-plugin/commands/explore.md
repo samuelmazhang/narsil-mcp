@@ -14,17 +14,17 @@ Execute the following steps:
 
 2. **Check capabilities**: Use `get_index_status` to see which features are enabled (git, call-graph, etc.)
 
-3. **Get AI overview**: Use `explain_codebase` to get an AI-friendly summary of the codebase
+3. **Show structure**: Use `get_project_structure` with `max_depth=3` to show the directory tree
 
-4. **Show structure**: Use `get_project_structure` with `max_depth=3` to show the directory tree
-
-5. **Find main components**:
+4. **Find main components**:
    - Use `find_symbols` with `symbol_type="class"` to find main data structures
    - Use `find_symbols` with `symbol_type="function"` and `pattern="*main*"` to find entry points
 
-6. **Understand dependencies**: Use `get_import_graph` to show how modules connect
+5. **Understand dependencies**: Use `get_import_graph` to show how modules connect
 
-7. **Check for issues**: Use `find_circular_imports` to identify potential architectural problems
+6. **Check for issues**: Use `find_circular_imports` to identify potential architectural problems
+
+7. **Optional graph manifest** (only if `get_index_status` shows `--graph` enabled): Use `get_ccg_manifest` for a compact AI-context-friendly summary of repository identity, symbol counts, and security posture.
 
 8. **Summarize**: Provide a clear summary of:
    - Project structure and organization

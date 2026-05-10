@@ -1,6 +1,6 @@
 {
   "name": "narsil",
-  "description": "Code intelligence plugin for narsil-mcp. Provides guidance for using 76+ code analysis tools including security scanning, call graph analysis, symbol search, and static analysis.",
+  "description": "Code intelligence plugin for narsil-mcp. Provides guidance for using 90 code analysis tools including security scanning, call graph analysis, symbol search, supply-chain SBOM, and SPARQL/CCG knowledge graph export.",
   "version": "1.0.0",
   "author": {
     "name": "Laurence"
@@ -13,6 +13,10 @@
     "security",
     "static-analysis",
     "call-graph",
+    "supply-chain",
+    "sbom",
+    "sparql",
+    "knowledge-graph",
     "mcp"
   ]
 }

@@ -6,7 +6,7 @@ allowed-tools: mcp__narsil-mcp__*
 
 # Narsil Code Intelligence
 
-Narsil is an MCP server providing 76 code intelligence tools. This skill helps you use them effectively.
+Narsil is an MCP server providing **90 code intelligence tools** (plus 2 prompts: `explain_codebase`, `find_implementation`). This skill helps you use them effectively.
 
 ## Critical: Parameter Naming
 
@@ -39,9 +39,19 @@ Some tools require specific CLI flags when starting narsil-mcp:
 | Call graph | `--call-graph` | get_call_graph, get_callers, get_callees, find_call_path, get_complexity, get_function_hotspots |
 | LSP | `--lsp` | Enhanced: get_hover_info, get_type_info, go_to_definition |
 | Neural search | `--neural` | neural_search, get_neural_stats |
-| Remote repos | `--remote` | add_remote_repo, list_remote_files, get_remote_file |
+| Remote repos | `--remote` (+ `GITHUB_TOKEN`) | add_remote_repo, list_remote_files, get_remote_file |
+| Knowledge graph | `--graph` | sparql_query, list_sparql_templates, run_sparql_template, get_ccg_manifest, export_ccg_*, query_ccg, import_ccg, import_ccg_from_registry, get_ccg_acl, get_ccg_access_info |
 
 If a tool returns empty results or errors, check `get_index_status` to verify the feature is enabled.
+
+### Relevant environment variables
+
+| Var | Purpose |
+|-----|---------|
+| `GITHUB_TOKEN` | Auth for `--remote` GitHub API calls |
+| `EMBEDDING_API_KEY` / `VOYAGE_API_KEY` / `OPENAI_API_KEY` | Neural embedding provider key |
+| `EMBEDDING_SERVER_ENDPOINT` | Custom/self-hosted embeddings endpoint |
+| `RUST_LOG` | Logging level (`debug`, `info`, `warn`, `error`) |
 
 ## Tool Selection Guide
 
@@ -59,8 +69,9 @@ If a tool returns empty results or errors, check `get_index_status` to verify th
 | Find code clones | `find_semantic_clones` | Detect duplicate/similar code (Type-3/4 clones) |
 | Search AST chunks | `search_chunks` | Want function/class boundaries |
 | Fuzzy symbol search | `workspace_symbol_search` | Unsure of exact name |
-| AI codebase overview | `explain_codebase` | Quick understanding of unfamiliar repo |
-| Find feature location | `find_implementation` | Know feature name, not code location |
+| Compact codebase manifest | `get_ccg_manifest` | AI-context-friendly summary of identity, symbol counts, languages, security posture (requires `--graph`) |
+
+> **Note:** `explain_codebase` and `find_implementation` are MCP **prompts**, not tools. They surface as templates the client can present to the user (or wrap as slash commands), and cannot be called from a tool-calling workflow. Use the tool sequences in the workflow tables below to achieve the same result.
 
 ### Understanding Code
 
@@ -117,6 +128,40 @@ If a tool returns empty results or errors, check `get_index_status` to verify th
 | Taint flow with types | `get_typed_taint_flow` |
 | Import dependency graph | `get_import_graph` |
 | Find circular imports | `find_circular_imports` |
+
+### Remote GitHub Repos (requires --remote, GITHUB_TOKEN env)
+
+| Task | Best Tool |
+|------|-----------|
+| Clone & index a GitHub repo | `add_remote_repo` |
+| List files via GitHub API (no clone) | `list_remote_files` |
+| Fetch single file via GitHub API | `get_remote_file` |
+
+### SPARQL Knowledge Graph (requires --graph)
+
+| Task | Best Tool |
+|------|-----------|
+| Run a SPARQL query against the RDF graph | `sparql_query` |
+| List built-in SPARQL templates | `list_sparql_templates` |
+| Run a named SPARQL template with params | `run_sparql_template` |
+
+### Code Context Graph / CCG export (requires --graph)
+
+CCG layers ship a portable, layered description of a codebase suitable for AI handoff or external indexing.
+
+| Task | Best Tool |
+|------|-----------|
+| Get Layer 0 manifest (~1-2KB JSON-LD) | `get_ccg_manifest` |
+| Export Layer 0 manifest to file | `export_ccg_manifest` |
+| Export Layer 1 architecture (~10-50KB) | `export_ccg_architecture` |
+| Export Layer 2 symbol index (gzipped N-Quads) | `export_ccg_index` |
+| Export Layer 3 full detail (gzipped N-Quads) | `export_ccg_full` |
+| Export all CCG layers as a bundle | `export_ccg` |
+| Run a SPARQL query against a repo's CCG | `query_ccg` |
+| Generate WebACL access control file | `get_ccg_acl` |
+| Show available CCG access tier info | `get_ccg_access_info` |
+| Import a CCG from URL/file | `import_ccg` |
+| Import from codecontextgraph.com registry | `import_ccg_from_registry` |
 
 ### Git History (requires --git)
 

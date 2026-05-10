@@ -15,43 +15,44 @@ Goal: Understand structure and main components.
 2. get_project_structure(repo, max_depth=3)
    → See top-level directory structure
 
-3. explain_codebase(repo)
-   → Get AI-friendly overview of the codebase
-
-4. find_symbols(repo, symbol_type="class", file_pattern="src/**/*")
+3. find_symbols(repo, symbol_type="class", file_pattern="src/**/*")
    → Find main data structures
 
-5. find_symbols(repo, symbol_type="function", pattern="*main*")
+4. find_symbols(repo, symbol_type="function", pattern="*main*")
    → Find entry points
 
-6. get_import_graph(repo)
+5. get_import_graph(repo)
    → Understand module dependencies
 
-7. find_circular_imports(repo)
+6. find_circular_imports(repo)
    → Identify potential issues
+
+7. get_ccg_manifest(repo)   # optional, requires --graph
+   → Compact AI-context-friendly manifest with symbol counts and security posture
 ```
+
+> Note: `explain_codebase` is registered as an MCP **prompt**, not a tool. It can't be called from a tool-calling workflow — surface it through the client's prompt UI (or via the `/narsil:explore` slash command, which captures the same intent through the steps above).
 
 ### Finding Where a Feature Lives
 
 Goal: Locate implementation of a specific feature.
 
 ```
-1. find_implementation(repo, feature="feature description")
-   → AI-assisted feature location
+1. hybrid_search(query="feature description in natural language")
+   → Semantic search for relevant code (BM25 + TF-IDF, Reciprocal Rank Fusion)
 
-2. hybrid_search(query="feature description in natural language")
-   → Semantic search for relevant code
-
-3. workspace_symbol_search(query="FeatureName")
+2. workspace_symbol_search(query="FeatureName")
    → Fuzzy search for related symbols
 
-4. For each candidate:
+3. For each candidate:
    find_symbol_usages(repo, symbol)
    → Confirm it's widely used
 
-5. get_symbol_definition(repo, symbol)
+4. get_symbol_definition(repo, symbol)
    → Read the implementation
 ```
+
+> Note: `find_implementation` is registered as an MCP **prompt**, not a tool. The slash command `/narsil:find-feature` runs the equivalent tool sequence above.
 
 ### Understanding Module Dependencies
 
@@ -313,6 +314,82 @@ Goal: Check changes before committing.
 3. For each modified file:
    scan_security(repo, path=modified_file)
    → Security check on changes
+```
+
+## Knowledge Graph (SPARQL / CCG)
+
+Requires `--graph` flag at startup.
+
+### Quick SPARQL Exploration
+
+Goal: Run analytical queries against the indexed RDF graph.
+
+```
+1. list_sparql_templates()
+   → See built-in templates (e.g., most-called functions, dependency cycles)
+
+2. run_sparql_template(template="<name>", params={...})
+   → Execute a parameterised template
+
+3. sparql_query(query="SELECT ?fn ?file WHERE { ... }")
+   → Custom SPARQL for ad-hoc analysis
+```
+
+### Exporting a Code Context Graph (CCG) for handoff
+
+Goal: Produce a portable, layered description of a repo for AI agents or external indexers.
+
+```
+1. get_ccg_manifest(repo)
+   → Layer 0: tiny JSON-LD manifest (identity, languages, symbol counts, security posture)
+
+2. export_ccg_architecture(repo, output_path="ccg-arch.jsonld")
+   → Layer 1: ~10-50KB module/architecture overview
+
+3. export_ccg_index(repo, output_path="ccg-index.nq.gz")
+   → Layer 2: gzipped N-Quads symbol index
+
+4. export_ccg_full(repo, output_path="ccg-full.nq.gz")
+   → Layer 3: full detail (largest, slowest)
+
+5. get_ccg_acl(repo)
+   → Generate WebACL for hosted/shared CCG
+
+# Or do everything at once:
+6. export_ccg(repo, output_dir="./ccg-bundle")
+   → Bundle of all layers
+```
+
+### Importing & Querying a Remote CCG
+
+Goal: Pull in a published CCG for cross-repo analysis.
+
+```
+1. import_ccg_from_registry(repo_url="https://github.com/owner/repo")
+   → Pull from codecontextgraph.com registry
+
+   # or:
+   import_ccg(source="https://example.com/ccg.nq.gz")
+
+2. query_ccg(repo, query="SELECT ... WHERE { ... }")
+   → SPARQL against the imported CCG
+```
+
+## Remote Repositories (GitHub)
+
+Requires `--remote` flag and `GITHUB_TOKEN` env var.
+
+### Cross-repo investigation without local clone
+
+```
+1. add_remote_repo(url="https://github.com/owner/repo")
+   → Clone + index a remote repo
+
+2. list_remote_files(url="https://github.com/owner/repo", path="src/")
+   → Browse without cloning (uses GitHub API)
+
+3. get_remote_file(url="https://github.com/owner/repo", path="src/main.rs")
+   → Fetch a single file via API
 ```
 
 ## Search Strategy
