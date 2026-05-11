@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.7.0-rc4] - 2026-05-11
+## [1.7.0-rc5] - 2026-05-11
 
 ### Fixed
 
@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release matrix publishes the five supported installer/Homebrew/Scoop
   artifacts: macOS x86_64, macOS ARM64, Linux x86_64, Linux ARM64, and
   Windows x86_64.
+- **Release CI timeouts now reflect graph-enabled builds**. The release
+  version check, test, and binary build jobs have enough headroom for the
+  Oxigraph/RocksDB compile path on GitHub-hosted runners.
 
 ### Added
 
