@@ -460,9 +460,25 @@ fn normalize_existing_path(path: &Path) -> Result<PathBuf> {
         std::env::current_dir()?.join(expanded)
     };
 
-    absolute
+    let canonical = absolute
         .canonicalize()
-        .with_context(|| format!("Path does not exist: {}", path.display()))
+        .with_context(|| format!("Path does not exist: {}", path.display()))?;
+    Ok(normalize_canonical_path(canonical))
+}
+
+fn normalize_canonical_path(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let path_str = path.to_string_lossy();
+        if let Some(rest) = path_str.strip_prefix("\\\\?\\UNC\\") {
+            return PathBuf::from(format!("\\\\{rest}"));
+        }
+        if let Some(rest) = path_str.strip_prefix("\\\\?\\") {
+            return PathBuf::from(rest);
+        }
+    }
+
+    path
 }
 
 fn expand_tilde(path: &Path) -> Result<PathBuf> {

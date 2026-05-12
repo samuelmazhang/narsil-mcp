@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Release CI timeouts now reflect graph-enabled builds**. The release
   version check, test, and binary build jobs have enough headroom for the
   Oxigraph/RocksDB compile path on GitHub-hosted runners.
+- **Windows repository path diagnostics use normal drive-letter paths**.
+  Canonicalized paths no longer surface the internal `\\?\` verbatim prefix
+  in startup path resolution or tests.
 
 ### Added
 
