@@ -1570,15 +1570,16 @@ impl CodeIntelEngine {
         output.push_str(&format!("Found {} references\n\n", references.len()));
 
         for (path, line, content) in references {
+            let truncated = if content.len() > 80 {
+                content.chars().take(80).collect::<String>()
+            } else {
+                content.clone()
+            };
             output.push_str(&format!(
                 "- `{}:{}` - `{}`\n",
                 path,
                 line,
-                if content.len() > 80 {
-                    &content[..80]
-                } else {
-                    content
-                }
+                truncated
             ));
         }
 
@@ -6307,7 +6308,7 @@ impl CodeIntelEngine {
                 // Show snippet (truncated if long)
                 let content = &result.document.content;
                 let snippet = if content.len() > 500 {
-                    format!("{}...", &content[..500])
+                    format!("{}...", content.chars().take(500).collect::<String>())
                 } else {
                     content.clone()
                 };
@@ -6391,7 +6392,7 @@ impl CodeIntelEngine {
 
                 let content = &result.document.content;
                 let snippet = if content.len() > 300 {
-                    format!("{}...", &content[..300])
+                    format!("{}...", content.chars().take(300).collect::<String>())
                 } else {
                     content.clone()
                 };
