@@ -67,6 +67,7 @@ impl ToolRegistry {
         registry.register(Box::new(repo::ValidateRepoHandler));
         registry.register(Box::new(repo::ReindexHandler));
         registry.register(Box::new(repo::GetIndexStatusHandler));
+        registry.register(Box::new(repo::SaveIndexHandler));
         registry.register(Box::new(repo::GetIncrementalStatusHandler));
         registry.register(Box::new(repo::GetMetricsHandler));
 

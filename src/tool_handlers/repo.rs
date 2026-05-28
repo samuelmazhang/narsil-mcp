@@ -177,3 +177,16 @@ impl ToolHandler for GetMetricsHandler {
         engine.get_metrics(format).await
     }
 }
+
+/// Handler for save_index tool
+pub struct SaveIndexHandler;
+#[async_trait::async_trait]
+impl ToolHandler for SaveIndexHandler {
+    fn name(&self) -> &'static str {
+        "save_index"
+    }
+
+    async fn execute(&self, engine: &CodeIntelEngine, _args: Value) -> Result<String> {
+        engine.save_index().await
+    }
+}

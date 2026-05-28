@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser as ClapParser, Subcommand};
-use narsil_mcp::{config, http_server, index, lsp, mcp, neural, persist, repo, streaming};
+use narsil_mcp::{config, http_server, index, lsp, mcp, mcp_http, neural, persist, repo, streaming};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, warn, Level};
@@ -115,6 +115,12 @@ struct ServerArgs {
     /// HTTP server port (default: 3000)
     #[arg(long, env = "NARSIL_HTTP_PORT", default_value = "3000")]
     http_port: u16,
+
+    /// MCP-over-HTTP server port (0 = disabled). When set, starts a
+    /// Streamable HTTP MCP server so remote clients can use narsil-mcp
+    /// over HTTP instead of stdio. Default: 1850.
+    #[arg(long, env = "NARSIL_MCP_PORT", default_value = "1850")]
+    mcp_port: u16,
 
     /// Tool preset (minimal, balanced, full, security-focused)
     /// Overrides the preset from config file
@@ -330,11 +336,51 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Always start the MCP server on stdio (for editor communication)
-    let server = mcp::McpServer::from_arc(engine, server_args.preset);
-    server.run().await?;
+    // Start MCP-over-HTTP server if port is set (must be separate from
+    // the visualization HTTP server so agents can talk MCP protocol directly)
+    if server_args.mcp_port > 0 {
+        info!("Starting MCP-over-HTTP server on port {}", server_args.mcp_port);
+        let mcp_engine = Arc::clone(&engine);
+        let mcp_port = server_args.mcp_port;
+        tokio::spawn(async move {
+            let mcp_server = mcp_http::McpHttpServer::new(mcp_engine, mcp_port);
+            if let Err(e) = mcp_server.run().await {
+                warn!("MCP-over-HTTP server error: {}", e);
+            }
+        });
+    }
 
-    Ok(())
+    // Always start the MCP server on stdio (for editor communication)
+    let server = mcp::McpServer::from_arc(Arc::clone(&engine), server_args.preset);
+    let stdio_result = server.run().await;
+
+    // If running in MCP-over-HTTP daemon mode, don't let stdio EOF
+    // shut down the whole process — keep the runtime alive for the
+    // HTTP MCP server (which runs in a background tokio::spawn task).
+    if server_args.mcp_port > 0 {
+        match stdio_result {
+            Ok(()) => {
+                info!(
+                    "stdio MCP server exited normally (expected in daemon mode). \
+                     MCP-over-HTTP continues on port {}.",
+                    server_args.mcp_port
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "stdio MCP server error ({}). \
+                     MCP-over-HTTP continues on port {}.",
+                    e, server_args.mcp_port
+                );
+            }
+        }
+        info!("MCP-over-HTTP server running. Press Ctrl+C to stop.");
+        tokio::signal::ctrl_c().await?;
+        info!("Shutting down.");
+        Ok(())
+    } else {
+        stdio_result
+    }
 }
 
 /// Apply a named repository profile from the loaded configuration.

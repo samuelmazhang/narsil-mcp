@@ -46,6 +46,8 @@ pub mod lsp;
 #[cfg(feature = "native")]
 pub mod mcp;
 #[cfg(feature = "native")]
+pub mod mcp_http;
+#[cfg(feature = "native")]
 pub mod neural;
 #[cfg(feature = "native")]
 pub mod persist;
